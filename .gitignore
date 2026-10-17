@@ -11,3 +11,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Supabase の接続先（公開リポジトリに鍵を載せない）
+ARApp/Resources/SupabaseSecrets.plist

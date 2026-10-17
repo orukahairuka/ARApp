@@ -5,14 +5,13 @@
 
 import SwiftUI
 
-/// 対戦画面。同じ地点にいる相手とマッチングし、毎ターン同時にタイミング攻撃をし合う
-/// 部品は同じフォルダの別ファイルにある（MonsterCardComponent、TimingGaugeComponent など）
+/// 対戦画面。同じ地点にいる相手とマッチングし、画面の空いている所をタップして攻撃し、溜まったら必殺技を撃つ
+/// 部品は同じフォルダの別ファイルにある（StatBarComponent、BattleEffects など）
 struct BattleView: View {
     let locationViewModel: LocationViewModel
     @State private var viewModel: BattleViewModel
-    /// 揺れの演出のきっかけ。増えるたびに 1 回揺れる
-    @State private var opponentShakeCount = 0
-    @State private var playerShakeCount = 0
+    /// タップした位置の波紋。クールダウン中でも出るので、タップが届いているかがわかる
+    @State private var tapRipple: TapRipple?
 
     init(locationViewModel: LocationViewModel, service: any BattleService) {
         self.locationViewModel = locationViewModel
@@ -20,148 +19,124 @@ struct BattleView: View {
     }
 
     var body: some View {
-        Group {
-            if let battle = viewModel.battle {
-                battleScreen(battle)
-            } else {
-                BattleLobbyComponent(
-                    myMonster: viewModel.myMonster,
-                    location: locationViewModel.currentLocation,
-                    isSearching: viewModel.phase == .searching || viewModel.phase == .cancellingSearch,
-                    isCancelling: viewModel.phase == .cancellingSearch,
-                    errorMessage: viewModel.errorMessage,
-                    onFind: { viewModel.findOpponent(locationID: $0.id) },
-                    onCancel: { viewModel.cancelSearch() }
-                )
-            }
-        }
-        .padding()
-        .sensoryFeedback(trigger: viewModel.lastEvent?.id) { _, _ in
-            viewModel.lastEvent?.kind.feedback
-        }
-        .onChange(of: viewModel.lastEvent?.id) {
-            guard case .turnResolved(let dealt, let taken) = viewModel.lastEvent?.kind else { return }
-            if dealt > 0 { opponentShakeCount += 1 }
-            if taken > 0 { playerShakeCount += 1 }
+        if let me = viewModel.me, let opponent = viewModel.opponent {
+            fightScreen(me: me, opponent: opponent)
+        } else {
+            BattleLobbyComponent(
+                myMonster: viewModel.myMonster,
+                location: locationViewModel.currentLocation,
+                isSearching: viewModel.phase == .searching || viewModel.phase == .cancellingSearch,
+                isCancelling: viewModel.phase == .cancellingSearch,
+                errorMessage: viewModel.errorMessage,
+                onFind: { viewModel.findOpponent(locationID: $0.id) },
+                onCancel: { viewModel.cancelSearch() }
+            )
+            .padding()
         }
     }
 
-    private func battleScreen(_ battle: BattleState) -> some View {
+    private func fightScreen(me: Fighter, opponent: Fighter) -> some View {
         VStack(spacing: 16) {
-            HStack {
-                Text("VS \(battle.opponent.monster.name)")
-                    .font(.headline)
-                Spacer()
-                Text("TURN \(battle.turn) / \(BattleState.turnLimit)")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
+            // 1. 上部：相手の名前と HP
+            StatBarComponent(title: opponent.name, value: opponent.hp, maxValue: opponent.maxHP, color: .red)
 
-            MonsterCardComponent(
-                name: battle.opponent.monster.name,
-                trait: battle.opponent.profile.trait,
-                isDefeated: battle.opponent.hp == 0
-            )
-            .overlay {
-                if let event = viewModel.lastEvent,
-                   case .hit(let judgement, let damage, _) = event.kind, damage > 0 {
-                    FloatingDamageComponent(text: "-\(damage)", color: judgement.color)
-                        .id(event.id)
+            // 2. 中央上：相手のモンスター
+            FighterImageComponent(systemName: "flame.fill", color: .orange, size: 120)
+                .overlay {
+                    if let hit = viewModel.lastHitOnOpponent {
+                        FloatingDamageComponent(
+                            text: "-\(hit.damage)",
+                            color: hit.isSpecial ? .yellow : .red,
+                            fontSize: hit.isSpecial ? 64 : 36
+                        )
+                        .id(hit.id)
+                    }
                 }
-            }
-            .shake(trigger: opponentShakeCount)
+                .shake(trigger: viewModel.lastHitOnOpponent?.id)
+                // 相手の攻撃のたびに自分の方へ踏み込む
+                .lunge(CGSize(width: -24, height: 36), trigger: viewModel.lastHitOnMe?.id)
+                // 倒したら薄くなる
+                .opacity(opponent.hp == 0 ? 0.2 : 1)
+                .animation(.easeOut(duration: 0.5), value: opponent.hp == 0)
+                .frame(maxWidth: .infinity, alignment: .trailing)
 
-            HPBarComponent(
-                title: "相手（\(battle.opponent.monster.name)）",
-                hp: battle.opponent.hp,
-                maxHP: battle.opponent.profile.maxHP,
-                color: .red
-            )
-            HPBarComponent(
-                title: "自分（\(battle.me.monster.name)）",
-                hp: battle.me.hp,
-                maxHP: battle.me.profile.maxHP,
-                color: .green
-            )
-            .shake(trigger: playerShakeCount)
+            Spacer(minLength: 0)
 
-            if viewModel.phase == .finished, let outcome = battle.outcome {
-                BattleResultComponent(outcome: outcome, opponentName: battle.opponent.monster.name) {
-                    viewModel.leaveBattle()
+            // 3. 中央下：自分のモンスター
+            FighterImageComponent(systemName: "shield.lefthalf.filled", color: .blue, size: 90)
+                .overlay {
+                    if let hit = viewModel.lastHitOnMe {
+                        FloatingDamageComponent(text: "-\(hit.damage)", color: .purple, fontSize: hit.isSpecial ? 64 : 36)
+                            .id(hit.id)
+                    }
                 }
-            } else {
-                // 止まっている間は再描画しない。位置は描画する時刻から毎回計算する
-                TimelineView(.animation(paused: viewModel.phase != .attacking)) { context in
-                    TimingGaugeComponent(
-                        position: viewModel.cursorPosition(at: context.date),
-                        zones: viewModel.gauge.zones,
-                        results: viewModel.zoneResults
-                    )
-                }
-                .frame(height: 70)
+                .shake(trigger: viewModel.lastHitOnMe?.id)
+                // 攻撃するたびに相手の方へ踏み込む
+                .lunge(CGSize(width: 24, height: -36), trigger: viewModel.lastHitOnOpponent?.id)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                BattleMessageComponent(
-                    event: viewModel.lastEvent,
-                    isWaitingForOpponent: viewModel.phase == .waitingForOpponent
+            // 4. 下部：自分の HP と必殺技ゲージ
+            VStack(spacing: 8) {
+                StatBarComponent(title: me.name, value: me.hp, maxValue: me.maxHP, color: .green)
+                StatBarComponent(
+                    title: "必殺技ゲージ",
+                    value: me.specialGauge,
+                    maxValue: Fighter.specialGaugeMax,
+                    color: me.canUseSpecial ? .orange : .yellow
                 )
-
-                controls
-                    .frame(height: 64)
             }
-        }
-    }
 
-    @ViewBuilder
-    private var controls: some View {
-        switch viewModel.phase {
-        case .choosingAction:
-            HStack(spacing: 8) {
-                ActionButtonComponent(title: "攻撃", detail: "ふつう", tint: .blue) {
-                    viewModel.startAttack(.normal)
-                }
-                ActionButtonComponent(title: "強攻撃", detail: "ダメージ×2・狭い", tint: .orange) {
-                    viewModel.startAttack(.strong)
-                }
-            }
-        default:
+            // 5. 最下部：必殺技ボタン
             Button {
-                viewModel.stop()
+                viewModel.useSpecial()
             } label: {
-                VStack(spacing: 2) {
-                    Text("STOP!")
-                        .font(.title2.bold())
-                    Text("あと \(viewModel.remainingTaps) 回")
-                        .font(.caption.monospacedDigit())
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Label(me.canUseSpecial ? "必殺技 READY!" : "必殺技", systemImage: "bolt.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(viewModel.phase != .attacking)
+            .tint(.yellow)
+            .disabled(!me.canUseSpecial)
         }
+        .padding()
+        // 空いている所もタップできるようにする。ボタンのタップはボタンが優先される
+        .contentShape(Rectangle())
+        .onTapGesture { location in
+            tapRipple = TapRipple(location: location)
+            viewModel.attack()
+        }
+        .overlay {
+            if let tapRipple {
+                TapRippleComponent()
+                    .position(tapRipple.location)
+                    .id(tapRipple.id)
+                    .allowsHitTesting(false)
+            }
+        }
+        .overlay {
+            // 必殺技が当たった瞬間、画面全体を光らせる
+            if let hit = viewModel.lastHitOnOpponent, hit.isSpecial {
+                FlashComponent()
+                    .id(hit.id)
+            }
+        }
+        .overlay {
+            // 決着が確定したら結果を全面に出す
+            if let outcome = viewModel.outcome {
+                BattleResultComponent(outcome: outcome, opponentName: opponent.name) {
+                    viewModel.leaveBattle()
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.3), value: viewModel.outcome)
     }
 }
 
-private struct ActionButtonComponent: View {
-    let title: String
-    let detail: String
-    let tint: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(detail)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(tint)
-    }
+private struct TapRipple {
+    let id = UUID()
+    let location: CGPoint
 }
 
 #Preview {

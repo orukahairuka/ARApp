@@ -38,6 +38,8 @@ struct ContentView: View {
     }
 
     /// SupabaseConfig に接続先が書いてあれば Supabase で対戦し、なければ CPU が相手になるダミーを使う
+    /// 【開発用】ここで DummyBattleService を使うのは開発中だけ。リリースするときは SupabaseBattleService だけにする
+    /// （DummyBattleService のクラス自体は BattleView の #Preview で使うので残す）
     private static func makeBattleService() -> any BattleService {
         if SupabaseConfig.isConfigured, let url = URL(string: SupabaseConfig.url) {
             SupabaseBattleService(url: url, anonKey: SupabaseConfig.anonKey)

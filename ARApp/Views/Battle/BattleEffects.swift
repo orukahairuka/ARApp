@@ -5,43 +5,76 @@
 
 import SwiftUI
 
-/// バトル画面の演出（判定の色、振動、揺れ）
-
-extension TimingJudgement {
-    var color: Color {
-        switch self {
-        case .perfect: .orange
-        case .good: .green
-        case .miss: .gray
-        }
-    }
-}
-
-extension BattleViewModel.Event.Kind {
-    /// 出来事ごとの振動
-    var feedback: SensoryFeedback? {
-        switch self {
-        case .hit(.perfect, _, _): .impact(weight: .heavy, intensity: 1)
-        case .hit(.good, _, _): .impact(weight: .light)
-        case .hit(.miss, _, _): .error
-        case .turnResolved(let dealt, let taken): dealt >= taken ? .success : .impact(flexibility: .rigid, intensity: 1)
-        }
-    }
-}
+/// バトル画面の演出（揺れ、踏み込み、タップの波紋、ダメージの数字、画面の光）
 
 extension View {
-    /// trigger が変わるたびに左右に揺れる
-    func shake(trigger: Int) -> some View {
-        keyframeAnimator(initialValue: 0.0, trigger: trigger) { content, offset in
-            content.offset(x: offset)
-        } keyframes: { _ in
-            KeyframeTrack {
-                CubicKeyframe(12, duration: 0.05)
-                CubicKeyframe(-10, duration: 0.07)
-                CubicKeyframe(6, duration: 0.07)
-                CubicKeyframe(-3, duration: 0.06)
-                CubicKeyframe(0, duration: 0.05)
-            }
+    /// trigger が変わるたびに左右に揺れる（攻撃を受けた演出）
+    func shake(trigger: UUID?) -> some View {
+        phaseAnimator([0, -12, 12, -6, 0], trigger: trigger) { content, x in
+            content.offset(x: x)
+        } animation: { _ in
+            .linear(duration: 0.05)
         }
+    }
+
+    /// trigger が変わるたびに offset の方向へ踏み込んで戻る（攻撃する演出）
+    func lunge(_ offset: CGSize, trigger: UUID?) -> some View {
+        phaseAnimator([CGSize.zero, offset, .zero], trigger: trigger) { content, value in
+            content.offset(value)
+        } animation: { _ in
+            .easeOut(duration: 0.08)
+        }
+    }
+}
+
+/// タップした位置に広がって消える円
+struct TapRippleComponent: View {
+    @State private var isExpanded = false
+
+    var body: some View {
+        Circle()
+            .stroke(.secondary, lineWidth: 2)
+            .frame(width: 60, height: 60)
+            .scaleEffect(isExpanded ? 1 : 0.2)
+            .opacity(isExpanded ? 0 : 1)
+            .onAppear {
+                withAnimation(.easeOut(duration: 0.4)) { isExpanded = true }
+            }
+    }
+}
+
+/// ダメージの数字。上に浮かびながら消える
+struct FloatingDamageComponent: View {
+    let text: String
+    let color: Color
+    let fontSize: CGFloat
+    @State private var isFloating = false
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: fontSize, weight: .heavy, design: .rounded))
+            .foregroundStyle(color)
+            .shadow(radius: 2)
+            .offset(y: isFloating ? -80 : -20)
+            .opacity(isFloating ? 0 : 1)
+            .allowsHitTesting(false)
+            .onAppear {
+                withAnimation(.easeOut(duration: 0.6)) { isFloating = true }
+            }
+    }
+}
+
+/// 画面全体が一瞬光って消える（必殺技の演出）
+struct FlashComponent: View {
+    @State private var isFading = false
+
+    var body: some View {
+        Color.yellow
+            .opacity(isFading ? 0 : 0.6)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+            .onAppear {
+                withAnimation(.easeOut(duration: 0.5)) { isFading = true }
+            }
     }
 }

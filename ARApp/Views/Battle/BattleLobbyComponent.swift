@@ -22,11 +22,14 @@ struct BattleLobbyComponent: View {
             Text("MONSTER BATTLE")
                 .font(.headline)
 
-            MonsterCardComponent(name: myMonster.name, trait: BattleProfile.of(myMonster).trait, isDefeated: false)
+            FighterImageComponent(systemName: "shield.lefthalf.filled", color: .blue, size: 90)
+            Text(myMonster.name)
+                .font(.title3.bold())
 
-            Text("同じ場所にいる人と対戦できます")
+            Text("同じ場所にいる人と対戦できます。画面をタップして攻撃しよう")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
             if let errorMessage {
                 Text(errorMessage)

@@ -2,35 +2,50 @@
 //  DummyBattleService.swift
 //  ARApp
 //
+//  ⚠️⚠️⚠️ 開発用のコード ⚠️⚠️⚠️
+//  Supabase がないとき（接続先の plist がない・プレビュー）に、本物の対戦相手の代わりに使う。
+//  本番では使わないが、プレビューと鍵を持っていないメンバーの環境で対戦画面が動かなくなるので削除しない。
+//  使っている場所：ContentView の makeBattleService()（plist がないとき）と、BattleView の #Preview
+//
 
 import Foundation
 
-/// ⚠️ 開発用：Supabase がなくても対戦を試せるダミー実装
-/// すぐに相手が見つかり、相手はランダムに攻撃してくる（CPU）
-/// 削除するときは、ContentView の makeBattleService でこのクラスを使っている箇所も消す
+/// 【開発用】Supabase がなくても対戦を試せるダミー実装
+/// すぐに相手が見つかり、相手（CPU）は一定の間隔で通常攻撃してくる
 final class DummyBattleService: BattleService {
-    private var opponentMonster: Monster?
+    /// CPU が攻撃する間隔（秒）
+    private static let attackInterval: Double = 1
 
     func findOpponent(locationID: String, monster: Monster) async throws -> Monster {
         try await Task.sleep(for: .seconds(1.5))
-        let opponent = Monster.all.randomElement()!
-        opponentMonster = opponent
-        return opponent
+        return Monster.all.randomElement()!
     }
 
-    func send(_ move: BattleMove, turn: Int) async throws {}
-
-    func opponentMove(turn: Int) async throws -> BattleMove {
-        // 相手も考えたり STOP を押したりしているように、少し待ってから返す
-        try await Task.sleep(for: .seconds(Double.random(in: 0.5...2)))
-        let zoneCount = opponentMonster.map { BattleProfile.of($0).zoneCount } ?? 3
-        let judgements: [TimingJudgement] = (0..<zoneCount).map { _ in
-            [.perfect, .good, .good, .miss].randomElement()!
+    func opponentActions() -> AsyncThrowingStream<BattleAction, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                while true {
+                    do {
+                        try await Task.sleep(for: .seconds(Self.attackInterval))
+                    } catch {
+                        break // キャンセルされた
+                    }
+                    continuation.yield(.normalAttack)
+                }
+                continuation.finish()
+            }
+            // 受け取る側が止まったら（決着した、対戦をやめた）攻撃も止める
+            continuation.onTermination = { _ in task.cancel() }
         }
-        return BattleMove(attackType: Bool.random() ? .normal : .strong, judgements: judgements)
     }
 
-    func leave() async {
-        opponentMonster = nil
+    func send(_ action: BattleAction) {
+        // CPU はこちらの行動を受け取る必要がない
     }
+
+    func finish(iWon: Bool) async throws -> Bool {
+        iWon
+    }
+
+    func leave() async {}
 }
